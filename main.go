@@ -11,10 +11,10 @@ import (
 )
 
 type MailRequest struct {
-	XMLName xml.Name ` + "`xml:"mail"`" + `
-	To      string   ` + "`xml:"to"`" + `
-	Subject string   ` + "`xml:"subject"`" + `
-	Body    string   ` + "`xml:"body"`" + `
+	XMLName xml.Name `xml:"mail"`
+	To      string   `xml:"to"`
+	Subject string   `xml:"subject"`
+	Body    string   `xml:"body"`
 }
 
 type MailTask struct {
@@ -106,10 +106,6 @@ func worker(id int) {
 
 func sendMail(task MailTask) error {
 	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
-	msg := []byte(fmt.Sprintf("To: %s
-Subject: %s
-
-%s
-", task.To, task.Subject, task.Body))
+	msg := []byte(fmt.Sprintf("To: %s\r\nSubject: %s\r\n\r\n%s\r\n", task.To, task.Subject, task.Body))
 	return smtp.SendMail(fmt.Sprintf("%s:%s", smtpHost, smtpPort), auth, smtpUser, []string{task.To}, msg)
 }
