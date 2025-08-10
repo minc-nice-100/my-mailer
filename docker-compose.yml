@@ -1,0 +1,19 @@
+version: '3.9'
+
+services:
+  mailer:
+    image: ghcr.io/<你的github用户名>/my-mailer:latest
+    container_name: mailer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SMTP_HOST: smtp.example.com
+      SMTP_PORT: "587"
+      SMTP_USER: user@example.com
+      SMTP_PASS: yourpassword
+    volumes:
+      - mailer-data:/app
+
+volumes:
+  mailer-data:
