@@ -1,13 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"log"
 	"net/http"
-	"net/smtp"
 	"os"
+	"strconv"
 	"sync"
+	"time"
+
+	mail "github.com/xhit/go-simple-mail/v2"
 )
 
 type MailRequest struct {
@@ -18,19 +22,25 @@ type MailRequest struct {
 }
 
 type MailTask struct {
-	To      string
-	Subject string
-	Body    string
+	To      string `json:"to"`
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+}
+
+type SendResponse struct {
+	Message string     `json:"message"`
+	Queue   []MailTask `json:"queue"`
 }
 
 var (
-	queue      = make(chan MailTask, 1000)
-	workerNum  = 5
-	wg         sync.WaitGroup
-	smtpHost   string
-	smtpPort   string
-	smtpUser   string
-	smtpPass   string
+	queue     = make(chan MailTask, 1000)
+	workerNum = 5
+	wg        sync.WaitGroup
+
+	smtpHost string
+	smtpPort string
+	smtpUser string
+	smtpPass string
 )
 
 func main() {
@@ -83,12 +93,39 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 
 	task := MailTask{To: req.To, Subject: req.Subject, Body: req.Body}
 
+	resp := SendResponse{}
+
 	select {
 	case queue <- task:
-		w.WriteHeader(http.StatusAccepted)
-		w.Write([]byte("邮件任务已入队列"))
+		resp.Message = "邮件任务已入队列"
 	default:
-		http.Error(w, "队列已满，请稍后再试", http.StatusServiceUnavailable)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		resp.Message = "队列已满，请稍后再试"
+	}
+
+	resp.Queue = getQueueSnapshot()
+
+	w.Header().Set("Content-Type", "application/json")
+	if resp.Message == "队列已满，请稍后再试" {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func getQueueSnapshot() []MailTask {
+	var tasks []MailTask
+	for {
+		select {
+		case t := <-queue:
+			tasks = append(tasks, t)
+		default:
+			for _, t := range tasks {
+				queue <- t
+			}
+			return tasks
+		}
 	}
 }
 
@@ -105,7 +142,33 @@ func worker(id int) {
 }
 
 func sendMail(task MailTask) error {
-	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
-	msg := []byte(fmt.Sprintf("To: %s\r\nSubject: %s\r\n\r\n%s\r\n", task.To, task.Subject, task.Body))
-	return smtp.SendMail(fmt.Sprintf("%s:%s", smtpHost, smtpPort), auth, smtpUser, []string{task.To}, msg)
+	server := mail.NewSMTPClient()
+	server.Host = smtpHost
+	port, err := strconv.Atoi(smtpPort)
+	if err != nil {
+		return fmt.Errorf("无效的 SMTP_PORT: %v", err)
+	}
+	server.Port = port
+	server.Username = smtpUser
+	server.Password = smtpPass
+	server.Encryption = mail.EncryptionSSLTLS // SMTPS 465端口必须
+	server.ConnectTimeout = 10 * time.Second
+	server.SendTimeout = 10 * time.Second
+
+	smtpClient, err := server.Connect()
+	if err != nil {
+		return fmt.Errorf("连接 SMTP 失败: %v", err)
+	}
+
+	email := mail.NewMSG()
+	email.SetFrom(smtpUser).
+		AddTo(task.To).
+		SetSubject(task.Subject).
+		SetBody(mail.TextPlain, task.Body)
+
+	if email.Error != nil {
+		return fmt.Errorf("邮件构建失败: %v", email.Error)
+	}
+
+	return email.Send(smtpClient)
 }
